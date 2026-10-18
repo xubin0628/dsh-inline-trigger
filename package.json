@@ -1,0 +1,53 @@
+{
+  "name": "dsh-inline-trigger",
+  "version": "1.0.0",
+  "description": "让 DSH 输入框在已有内容时也能用 / 唤起指令菜单、用 @ 引用对话与文件（包括紧跟在中文等非 ASCII 文字之后输入的情况）。Open the DSH composer / command and @ reference menus even when the draft is not empty, including right after CJK text.",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "composer",
+    "slash",
+    "mention",
+    "trigger"
+  ],
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/en.json",
+    "locale/zh.json",
+    "icon.svg",
+    "README.md",
+    "LICENSE",
+    "test/detection.test.mjs"
+  ],
+  "license": "MIT",
+  "author": "xubin0628",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xubin0628/dsh-inline-trigger.git"
+  },
+  "homepage": "https://github.com/xubin0628/dsh-inline-trigger#readme",
+  "bugs": {
+    "url": "https://github.com/xubin0628/dsh-inline-trigger/issues"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  }
+}

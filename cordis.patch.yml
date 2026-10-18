@@ -1,0 +1,10 @@
+# dsh-inline-trigger —— DSH bundle patch（挂载声明）
+#
+# 把本插件插入当前 profile 的配置树。Host 侧只提供一条空行，真正的行为在
+# 浏览器半边（client.js，由 package.json 的 dsh.client 声明发现）。
+#
+# 安装：在 DSH 会话里让 agent 用 plugin_manager install_bundle 安装本包目录即可，
+# 不需要手工改 profile 的 package.json / cordis.patch.yml。
+- insert:
+    - id: dsh-inline-trigger
+      name: dsh-inline-trigger

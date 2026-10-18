@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Inline / and @ triggers in the composer",
+    "description": "Opens the command menu on / and the session/file reference menu on @ even when the composer already has text, including right after CJK text."
+  }
+}
