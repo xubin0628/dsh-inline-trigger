@@ -17,7 +17,7 @@
 
 ### 直接下载 zip（免 git）
 
-从 [Releases](https://github.com/xubin0628/dsh-inline-trigger/releases/latest) 下载 `dsh-inline-trigger-1.0.0.zip` 并解压，然后在 DSH 会话里让 agent 安装该目录：
+从 [Releases](https://github.com/xubin0628/dsh-inline-trigger/releases/latest) 下载 `dsh-inline-trigger-1.0.1.zip` 并解压，然后在 DSH 会话里让 agent 安装该目录：
 
 ```
 plugin_manager install_bundle { target: "<解压目录绝对路径>" }
