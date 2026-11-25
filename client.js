@@ -51,6 +51,23 @@
  * relaxes the boundary after ASCII words for both triggers; the default
  * `'cjk'` mode keeps email/path protection. URL carve-outs stay in both modes.
  *
+ * ## Clicking a folder descends into it
+ *
+ * The shipped `@` menu renders a directory row with `drill: true`, but only two
+ * gestures descend: Tab on the highlighted row and the chevron at its trailing
+ * edge. Clicking the row itself routes through the row's ordinary settling pick,
+ * which inserts `@folder/` and closes the menu — so with a pointer alone a
+ * workspace whose entries are all in folders never reaches their contents.
+ *
+ * The plugin wraps `InputTriggerController.pick()`: when the gesture began with
+ * a pointer press and the row carries `drill: true`, the pick is promoted to
+ * the row's drill action, which keeps the menu open on the folder's listing.
+ * Enter and Tab keep the host's semantics exactly — Enter still selects the
+ * folder itself (so a directory stays referenceable as an atomic mention) —
+ * so the two abilities coexist: click to look inside, Enter to take the folder.
+ * Pointer vs keyboard is decided by a capture-phase `pointerdown` on `document`
+ * that a following `keydown` disarms; nothing in the editor DOM is touched.
+ *
  * The patch is installed as an effect on the injected `inputTriggers` service
  * and fully restored when the plugin fiber unloads.
  */
@@ -204,6 +221,51 @@ window.__ModuleLoader__.load({
       }
 
       /**
+       * Whether the gesture that is resolving a menu row began with a pointer
+       * press rather than a key. The shipped `MenuView` picks rows on
+       * `mousedown` and drills on a chevron whose handler calls
+       * `stopPropagation`, so a row-level press always reaches this flag while
+       * the chevron never does — the promotion below therefore cannot
+       * double-fire.
+       *
+       * A capture-phase `pointerdown` arms the flag and a capture-phase
+       * `keydown` disarms it, which covers the one ambiguous sequence: a press
+       * that lands on a row without producing a pick (a drag, or a press the
+       * editor swallows) must not make a later Enter or Tab behave like a
+       * click. Listeners are passive observers on `document`; no editor DOM is
+       * modified and no event is prevented or stopped.
+       */
+      const pointer = { pressed: false, installed: false };
+
+      /**
+       * Install the document-level gesture listeners once for the page.
+       *
+       * They are deliberately not tied to a fiber's lifetime: two fibers can
+       * overlap during a hot reload, and whichever unloaded second would
+       * otherwise strip listeners the live one still reads. They only set a
+       * boolean, and the promotion that reads it belongs to the `pick()` patch
+       * that is restored on unload, so leaving them in place changes nothing.
+       */
+      function installPointerTracking() {
+        if (pointer.installed) return;
+        const target = typeof document === 'undefined' ? undefined : document;
+        if (target === undefined) return;
+        target.addEventListener('pointerdown', () => { pointer.pressed = true; }, true);
+        target.addEventListener('keydown', () => { pointer.pressed = false; }, true);
+        pointer.installed = true;
+      }
+
+      /**
+       * Consume the gesture flag for one pick.
+       * @returns {boolean} whether a pointer press started the gesture.
+       */
+      function pointerGesture() {
+        const pressed = pointer.pressed;
+        pointer.pressed = false;
+        return pressed;
+      }
+
+      /**
        * Build the same-length shadow draft the host should detect instead, or
        * return `draft` unchanged when the host already detects the token (or
        * should not detect anything here).
@@ -256,10 +318,18 @@ window.__ModuleLoader__.load({
             const serviceProto = Object.getPrototypeOf(service);
             if (serviceProto === null || typeof serviceProto.sessionOf !== 'function') return;
 
+            try {
+              installPointerTracking();
+            } catch (error) {
+              console.error('[dsh-inline-trigger] pointer tracking failed, folder rows keep the host click:', error);
+            }
+
             const originalSessionOf = serviceProto.sessionOf;
             let controllerProto = null;
             let originalTrack = null;
             let patchedTrack = null;
+            let originalPick = null;
+            let patchedPick = null;
 
             /** Wrap one controller class exactly once (also across hot reloads). */
             const patchControllerClass = (controller) => {
@@ -268,6 +338,9 @@ window.__ModuleLoader__.load({
               if (proto === null || proto === controllerProto || typeof proto.track !== 'function') return;
               if (controllerProto !== null && patchedTrack !== null && controllerProto.track === patchedTrack) {
                 controllerProto.track = originalTrack;
+              }
+              if (controllerProto !== null && patchedPick !== null && controllerProto.pick === patchedPick) {
+                controllerProto.pick = originalPick;
               }
               controllerProto = proto;
               originalTrack = proto.track;
@@ -281,6 +354,36 @@ window.__ModuleLoader__.load({
                 return originalTrack.call(this, next, caret, guard, draftRev);
               };
               proto.track = patchedTrack;
+
+              if (typeof proto.pick !== 'function') return;
+              originalPick = proto.pick;
+              patchedPick = function patchedPick(source, index, action) {
+                // The flag is consumed on every pick, including the chevron's
+                // explicit drill: leaving it armed would let a stale press
+                // promote an unrelated later pick.
+                let byPointer = false;
+                try {
+                  byPointer = pointerGesture();
+                } catch (error) {
+                  console.error('[dsh-inline-trigger] pointer gesture read failed:', error);
+                }
+                let next = action;
+                try {
+                  // `pick()` declares `action = 'pick'`, so a row click arrives
+                  // as the settling default rather than as `undefined`.
+                  if ((action === undefined || action === 'pick') && byPointer) {
+                    const group = this.menu.getSnapshot().groups.find((item) => item.source === source);
+                    if (group !== undefined && group.status === 'ready' && group.items[index]?.drill === true) {
+                      next = 'drill';
+                    }
+                  }
+                } catch (error) {
+                  console.error('[dsh-inline-trigger] pointer drill promotion failed, using the host action:', error);
+                  next = action;
+                }
+                return originalPick.call(this, source, index, next);
+              };
+              proto.pick = patchedPick;
             };
 
             const patchedSessionOf = function patchedSessionOf(...args) {
@@ -303,6 +406,14 @@ window.__ModuleLoader__.load({
                 && controllerProto.track === patchedTrack
               ) {
                 controllerProto.track = originalTrack;
+              }
+              if (
+                controllerProto !== null
+                && patchedPick !== null
+                && originalPick !== null
+                && controllerProto.pick === patchedPick
+              ) {
+                controllerProto.pick = originalPick;
               }
             };
           }, 'dsh-inline-trigger: inline / and @ boundary');

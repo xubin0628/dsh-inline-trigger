@@ -273,6 +273,127 @@ function makeFakeRuntime() {
   console.log('ok   non-integer caret passes through');
 }
 
+/* -------------------------------------------------------------------------- */
+/* 6. Clicking a folder descends into it                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A controller stand-in that records what `pick()` was asked to do, paired with
+ * a menu snapshot shaped like the real `MenuState`. The `action = 'pick'`
+ * default mirrors the shipped `InputTriggerController.pick()` exactly, which
+ * is what makes a row click arrive as the settling default.
+ */
+function makePickRuntime(items) {
+  const picks = [];
+  class FakeController {
+    constructor() {
+      this.menu = { getSnapshot: () => ({ open: true, groups: [{ source: 'reference', status: 'ready', items }] }) };
+    }
+    track() {}
+    pick(source, index, action = 'pick') {
+      picks.push({ source, index, action });
+    }
+  }
+  const controller = new FakeController();
+  class FakeService {
+    sessionOf() { return controller; }
+  }
+  const service = new FakeService();
+  const effects = [];
+  const ctx = {
+    inject(deps, callback) {
+      assert.deepEqual(deps, ['inputTriggers']);
+      callback({
+        get: () => service,
+        effect(execute) {
+          effects.push(execute());
+          return () => {};
+        },
+      });
+    },
+  };
+  return { ctx, service, controller, picks, effects };
+}
+
+const folderRow = { name: 'test/', icon: 'folder', drill: true, value: '{"kind":"file","fileKind":"directory"}' };
+const fileRow = { name: 'client.js', icon: 'file', value: '{"kind":"file","fileKind":"file"}' };
+
+// A simulated pointer press: the plugin listens on `document` in capture phase.
+function pressPointer() {
+  const listeners = globalThis.document?._listeners?.pointerdown ?? [];
+  for (const listener of listeners) listener({ type: 'pointerdown' });
+}
+function pressKey() {
+  const listeners = globalThis.document?._listeners?.keydown ?? [];
+  for (const listener of listeners) listener({ type: 'keydown' });
+}
+
+{
+  // Minimal document stub: capture-phase listeners only, which is all the
+  // plugin registers.
+  const listeners = { pointerdown: [], keydown: [] };
+  globalThis.document = {
+    _listeners: listeners,
+    addEventListener(type, fn) {
+      if (listeners[type] !== undefined && !listeners[type].includes(fn)) listeners[type].push(fn);
+    },
+    removeEventListener(type, fn) {
+      if (listeners[type] === undefined) return;
+      const at = listeners[type].indexOf(fn);
+      if (at >= 0) listeners[type].splice(at, 1);
+    },
+  };
+}
+
+{
+  const runtime = makePickRuntime([folderRow, fileRow]);
+  exports.apply(runtime.ctx);
+  runtime.service.sessionOf();
+
+  // A click on a folder row descends instead of settling the mention.
+  pressPointer();
+  runtime.controller.pick('reference', 0);
+  assert.deepEqual(runtime.picks.at(-1), { source: 'reference', index: 0, action: 'drill' },
+    'clicking a folder row must drill into the folder');
+  console.log('ok   click on a folder row drills into it');
+
+  // The flag is consumed: a click followed by a keyboard pick must not leak.
+  pressPointer();
+  runtime.controller.pick('reference', 0);
+  runtime.controller.pick('reference', 0);
+  assert.equal(runtime.picks.at(-1).action, 'pick',
+    'the pointer flag must be consumed by exactly one pick');
+  console.log('ok   pointer flag is consumed once');
+
+  // Enter on a folder must keep the host's settling pick, so a directory stays
+  // referenceable as one mention.
+  pressKey();
+  runtime.controller.pick('reference', 0);
+  assert.equal(runtime.picks.at(-1).action, 'pick',
+    'Enter on a folder row must still settle the folder mention');
+  console.log('ok   keyboard pick on a folder still settles it');
+
+  // Clicking a plain file stays a settling pick.
+  pressPointer();
+  runtime.controller.pick('reference', 1);
+  assert.equal(runtime.picks.at(-1).action, 'pick', 'clicking a file must settle it');
+  console.log('ok   click on a file settles it');
+
+  // The chevron already sends an explicit drill; the flag must not change it.
+  pressPointer();
+  runtime.controller.pick('reference', 0, 'drill');
+  assert.equal(runtime.picks.at(-1).action, 'drill', 'an explicit drill action passes through');
+  console.log('ok   explicit drill action passes through untouched');
+
+  // Cleanup restores the host pick().
+  const cleanup = runtime.effects[0];
+  cleanup();
+  pressPointer();
+  runtime.controller.pick('reference', 0);
+  assert.equal(runtime.picks.at(-1).action, 'pick', 'after dispose the host pick() is restored');
+  console.log('ok   pick() restored on dispose');
+}
+
 if (failures > 0) {
   console.error(`\n${failures} failing case(s)`);
   process.exitCode = 1;

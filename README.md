@@ -47,6 +47,31 @@ dsh plugin --profile desktop add link:<克隆目录绝对路径>
 
 直接在插件源码目录执行同样的 `plugin_manager install_bundle`（`target` 指向源码目录）即可；profile 会以链接方式引用该目录，改完代码后页面热重载生效。
 
+## 兼容性
+
+已在 **DSH 0.2.2-rc.3** 上逐个核对过它依赖的上游面，结论是**接口未变、无需改写**：
+
+| 依赖的上游面 | 0.2.2-rc.3 现状 |
+|---|---|
+| `ctx.inject(['inputTriggers'])` + `ctx.get('inputTriggers')` | 服务仍在，`InputTriggerService` 是普通 class（非可调用服务），`Object.getPrototypeOf(service)` 就是它的原型 |
+| `InputTriggerService.sessionOf(actx)` | 签名未变；会话 composer 仍通过 `rootCtx.get('inputTriggers').sessionOf(actx)` 取控制器 |
+| `InputTriggerController.track(draft, caret, guard, draftRev)` | 仍是 4 个参数，`guard.tier` 仍是 `plain / claimed / frozen`，调用点仍传 `projection.detectText` 与真实 `rev` |
+| `InputTriggerController.pick(source, index, action)` | 仍是 3 个参数；`action` 省略即「落选」，`'drill'` 即「进入文件夹」，`MenuView` 的行点击省略它、行尾箭头显式传 `'drill'` |
+| `core/detect.ts` 的边界规则 | 与 `test/detection.test.mjs` 里原样抄录的那份逐条一致（含 `@"..."` 引号语法来自 `@deepseek-ai/dsh-file-reference/grammar`） |
+| 客户端注册格式 `window.__ModuleLoader__.load({ id, factory })` | 现役格式；`id` 必须等于包名，本包一致 |
+| `dsh.client.platform / immediately / inject` | 仍在 `parseDshClient()` 的校验范围内 |
+
+`package.json` 现在显式声明了兼容范围：
+
+```json
+"engines": { "dsh": ">=0.2.2-rc.1 <0.3.0" }
+```
+
+DSH 的兼容性判定先读 `engines.dsh`（`semver.satisfies(..., { includePrerelease: true })`，所以 rc 版也能命中）；
+不满足时它会把这条 entry 禁用并告警，而不是带着不匹配的版本继续跑。升到 0.3 之后请重新核对再放宽这个范围。
+
+上游若把边界规则放宽（例如允许任意字符后触发），本插件会自动退化为纯直通，不需要改代码。
+
 ## 生效范围
 
 | 输入 | 原生 DSH | 装插件后 |
@@ -63,7 +88,24 @@ dsh plugin --profile desktop add link:<克隆目录绝对路径>
 
 规则一句话：**`/` 只在非 ASCII 文字（中文、日文、韩文、西里尔、带音标拉丁等）后面放宽；`@` 在除 ASCII 字母/数字/下划线、`/`、`:`、`@` 以外的任意非空白字符后面放宽。** 这样既解决中文输入的问题，又不会在邮箱、路径、URL 里乱弹菜单。
 
-已触发菜单之后的一切行为（键盘选择、引用 chip 插入、`/` 指令的 popup / 动作 / 直接执行、Esc 关闭、IME、只读/命令 chip 阶段）都沿用 DSH 原生实现，本插件只影响「是否判定为触发」这一步：
+## 文件夹：点一下就进去
+
+工作区里的东西常常都在文件夹里，而原生 `@` 菜单要进一层只能按 **Tab** 或点行尾那个小箭头；**单击文件夹所在的那一行**是把 `@文件夹/` 插进输入框并把菜单关掉。只用鼠标的人因此一直在「列出来的文件夹」和「文件夹里的内容」之间来回：点一次就选中了文件夹，想看里面还得再想办法。
+
+装上本插件后：
+
+| 操作（在 `@` 菜单里） | 原生 DSH | 装插件后 |
+| --- | --- | --- |
+| 单击文件夹行 | 插入 `@文件夹/`，菜单关闭 | **进入该文件夹，菜单保持打开并列出内容** |
+| 单击行尾箭头 | 进入文件夹 | 不变 |
+| 高亮文件夹行后按 Tab | 进入文件夹 | 不变 |
+| 高亮文件夹行后按 Enter | 插入 `@文件夹/`，菜单关闭 | 不变 |
+
+也就是说两种能力并存：**鼠标点就往下看，回车就把整个文件夹当成一个引用收下**。文件夹可以一层层点下去，每一层里的文件或文件夹都能选。
+
+插件怎么区分两者：`MenuView` 用 `mousedown` 落选、用键盘仲裁处理 Enter/Tab；插件在 `document` 上以捕获阶段监听 `pointerdown` / `keydown`，只记一个先后标志，鼠标落在文件夹行上时把这次落选升级成该行的「进入」动作。监听器不改编辑器 DOM、不拦截任何事件；插件卸载时对被包装的 `pick()` 完整还原。
+
+已触发菜单之后的一切行为（键盘选择、引用 chip 插入、`/` 指令的 popup / 动作 / 直接执行、Esc 关闭、IME、只读/命令 chip 阶段）都沿用 DSH 原生实现，本插件只影响「是否判定为触发」和上面这一次「点击文件夹」的落选语义：
 
 - 输入框最前已经有一条命令 chip（`claimed` 阶段）时，`/` 仍不触发（与原生一致）；
 - `frozen` 阶段（提交中等）不触发；
@@ -125,6 +167,9 @@ git clone https://github.com/xubin0628/dsh-inline-trigger.git
 | `你好/` | ❌ | ✅ |
 | `参考@会话` | ❌ | ✅ |
 | `a@b.com`, `src/index.ts`, `https://…` | ❌ | ❌ (deliberate protection) |
+| click a folder row in the `@` menu | inserts `@folder/`, menu closes | **enters the folder, menu stays open** |
+
+The shipped `@` menu lets a directory be reached only with Tab or the row's trailing chevron; a plain click settles `@folder/` and closes the menu, so a pointer-only user never gets into the folder. The plugin wraps `InputTriggerController.pick()`: a pick that began with a pointer press and whose row carries `drill` is promoted to the row's drill action. Enter keeps its meaning, so a folder stays referenceable as one atomic mention while a click descends into it.
 
 Set `localStorage['dsh-inline-trigger:mode'] = 'always'` in the page console to relax the boundary after ASCII words too. Tests: `node test/detection.test.mjs`. MIT licensed.
 
